@@ -1,0 +1,175 @@
+---
+title: "Kidnapping Data"
+author: "Marjorie Waters"
+date: "Saturday, July 19, 2014"
+output: html_document
+---
+
+The data for this example comes from the FBI's National Incident-Based Reporting System [NIBRS](http://www.icpsr.umich.edu/icpsrweb/NACJD/NIBRS/).  A subset of data for four states for the years 2002-2004 was compiled.  The states included are:
+
+- Ohio
+- Texas
+- Iowa
+- Kansas
+
+### Section 1:  Import and Data Preparation
+
+Import the data from the csv file.  Note that this analysis uses three additional libraries - *ggplot2, plyr, and DMwR*.
+
+```{r eval=FALSE}
+#Libraries needed to support the analysis
+library(ggplot2)
+library(plyr)
+library(DMwR)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(plyr)
+library(DMwR)
+```
+
+```{r}
+#import the data from csv file
+kidnap <- read.csv("kidnapping extract.csv", header = TRUE)
+head(kidnap,4)
+```
+
+**Age Data:** Note that the Age data is a string, this needs to be converted to numeric, and the data filtered for juvenile cases (age <= 15).  An age grouping will also be added.
+
+```{r warning=FALSE}
+
+#Clean Age data and convert to numeric
+kidnap$Age2 <- as.character(kidnap$Age)
+unique(subset(kidnap$Age2, nchar(kidnap$Age2)>5))  #show unusual values
+
+#Convert 00: to NA, and new born, babies to age = 0
+kidnap$Age2 <- gsub("00: Unknown",NA,kidnap$Age2)
+kidnap$Age2 <- gsub("BB: 7-364 Days Old","0",kidnap$Age2)
+kidnap$Age2 <- gsub("NB: 1-6 Days Old","0",kidnap$Age2)
+kidnap$Age2 <- gsub("NN: Under 24 Hours (neonate)","0",kidnap$Age2)
+
+#Remove ":" and convert to numeric.  Unknown/NA are removed as age is a critical factor
+kidnap$Age2 <- gsub(":","",kidnap$Age2)
+kidnap$Age2 <- as.numeric(kidnap$Age2, na.rm = TRUE)
+
+#Filter for age<=15 creating a new dataframe, add age group
+kidnap.c <- subset(kidnap, kidnap$Age2 <= 15)
+kidnap.c$AgeGroup <- cut(kidnap.c$Age2, 
+                         breaks=c(-0.5,5.5,10.5,Inf), 
+                         labels=c('0-5','6-10','11-15'))
+```
+
+The mean age of the original data is `r round(mean(kidnap$Age2, na.rm=TRUE),1)`.  The mean age of the filtered data is `r round(mean(kidnap.c$Age2, na.rm=TRUE),1)`. The  distribution of ages on the final filtered dataset is shown in the histogram below, along with a summary of the age groups.
+
+```{r echo=FALSE}
+par(mfrow=c(1,2))
+hist(kidnap.c$Age2, xlab = "Age", ylab="Frequency", main="Distribution by Age", col="Yellow")
+x = table(kidnap.c$AgeGroup)
+lbls <- paste(names(x), "\n", x, sep="")
+pie(x, labels=lbls, main="Number by age group", col=rainbow(length(lbls)))
+```
+
+**Date Data:** The date field in the NIBRS data is a string of type "yyyymmdd".  This needs to be converted to a proper date, which better supports trending and enables extracting potentially important attributes like day of the week.  R apparently doesn't recognize "yyyymmdd" as an "unambigous date format".  The gsub function is used to first convert the string to an usable format and then the modifed string is converted to a date.
+
+```{r}
+#Convert to acceptable string format and then to date.
+kidnap.c$Date2 <- gsub('([0-9]{4})([0-9]{2})([0-9]{2})$','\\1-\\2-\\3', kidnap.c$Incident.Date)
+kidnap.c$Date3 <- gsub('([0-9]{4})([0-9]{2})([0-9]{2})$','\\1-\\2', kidnap.c$Incident.Date)  #additional variant used in other analyses
+kidnap.c$Date2 <- as.Date(kidnap.c$Date2, '%Y-%m-%d')
+kidnap.c$Year <- as.factor(format(kidnap.c$Date2, '%Y'))
+kidnap.c$Month <- as.factor(format(kidnap.c$Date2, '%m'))
+kidnap.c$Day <- factor(weekdays(kidnap.c$Date2), 
+                  levels=c("Sunday","Monday","Tuesday","Wednesday",
+                  "Thursday","Friday","Saturday"), ordered=TRUE)
+
+```
+
+The number of incidents by month and day of week are shown the the graphs below.
+
+```{r echo=FALSE, warning=FALSE}
+
+Month.year <- ddply(kidnap.c,.(Month,Year), summarize, freq=length(Month))
+Day <- ddply(kidnap.c,.(Day), summarize, freq=length(Day))
+ggplot(data=Month.year, aes(x=Month, y=freq, fill=Year))+geom_bar(stat="identity") + ggtitle("Cases by Month")+ylab("Frequency")+xlab("")
+ggplot(data=Day, aes(x=Day, y=freq))+geom_bar(stat="identity",fill="red")+ggtitle("Cases by Day of Week")+ylab("Frequency")+xlab("")
+
+```
+
+**Relationship Data:** The NIBRS data includes detailed catgories for the relationship of victim to offender.  For this analysis, these will be grouped into 1) Family 2) Known (i.e. offender is babysitter, neighbor, etc) 3) Stranger and 4) Unknown/NA.
+
+```{r}
+#Create grouping of Relationship based on a mapping table
+relate <- read.table(header=TRUE, stringsAsFactors = TRUE,
+                     text="'Relationship' 'RelateGroup'
+  ': ' NA
+  'AQ: Victim was Acquaintance' 'Known'
+  'BE: Victim was Babysittee (the baby)' 'Known'
+  'BG: Victim was Boyfriend/Girlfriend'  'Family'
+  'CF: Victim was Child of Boyfriend/Girlfriend'	'Family'
+  'CH: Victim was Child'	'Family'
+  'FR: Victim was Friend'	'Known'
+  'GC: Victim was Grandchild'	'Family'
+  'NE: Victim was Neighbor'	'Known'
+  'OF: Victim was Other Family Member'	'Family'
+  'OK: Victim was Otherwise Known'	'Known'
+  'RU: Relationship Unknown'	NA
+  'SB: Victim was Sibling'	'Family'
+  'SC: Victim was Stepchild'	'Family'
+  'SE: Victim was Spouse'	'Family'
+  'SP: Victim was Stepparent'	'Family'
+  'SS: Victim was Stepsibling'	'Family'
+  'ST: Victim was Stranger'	'Stranger'
+  'VO: Victim was Offender'	'Known'")
+
+kidnap.c <- merge(kidnap.c, relate, by = 'Relationship')
+```
+
+The graphs below show the original detailed Relationship data and the grouped data.  Note that "Unknown" data has been excluded.
+
+```{r echo=FALSE}
+
+rel <- ddply(subset(kidnap.c,!is.na(RelateGroup)),.(Relationship,RelateGroup), summarize, freq=length(Relationship))
+rel$col[rel$RelateGroup=="Family"]<-"red"
+rel$col[rel$RelateGroup=="Known"]<-"green"
+rel$col[rel$RelateGroup=="Stranger"]<-"blue"
+layout(matrix(c(1,1,1,2), 1, 4, byrow = TRUE))
+dotchart(rel$freq, labels=rel$Relationship, cex=0.6, groups=rel$RelateGroup, col=rel$col, main="All Relationships")
+barplot(table(kidnap.c$RelateGroup), main="Relationship Groups", col=rainbow(3))
+
+```
+
+### Section 2:  Summary and Exploratory Analysis
+
+Some analysis has been completed during the data preparation phase.  There does not seem to be a particular day of week or month with more or less incidents.  The most common relationship of victim to offender is **`r centralValue(kidnap.c$Relationship)`**.  The states have widely varying levels of incidents, this may be due to real trends or may be an artifact of the number of counties reporting.  The 2004 data from Ohio is suspect and warrants further investigation.
+
+```{r echo=FALSE}
+table(kidnap.c$Year,kidnap.c$State)
+```
+
+
+**Age group and relationship:**  In abductions of young children (age 0-5) the offender is typically a family member.  With older children, the abductor is more likely to be a stranger.
+
+```{r echo=FALSE}
+Age.family <- ddply(subset(kidnap.c, !is.na(RelateGroup)), .(AgeGroup,RelateGroup), summarize, freq=length(AgeGroup))
+ggplot(data=Age.family, aes(x=RelateGroup, y=freq, fill=AgeGroup))+geom_bar(stat="identity")+ylab("Frequency")+xlab("")
+```
+
+```{r}
+#Additional data prep needed for plotting top locations by sex of victim
+y<-as.data.frame(table(kidnap.c$Location))
+names(y)=c("Location","Count")
+y<-subset(y,Location!="25: Other/unknown")
+topy<-y[rev(order(y$Count)),"Location"][1:5] 
+kidnap.c$LocGroup <- ifelse(kidnap.c$Location %in% topy, "top", "no" )
+```
+
+**Sex of the victim and location:**  There are `r nlevels(kidnap.c$Location)` location categories in the NIBRS dataset.  The top 5 locations were isolated and analyzed with respect to the sex of the victim.  The top two locations, `r topy[1]` and `r topy[2]` account for `r round((y$Count[y$Location==topy[1]]+y$Count[y$Location==topy[1]])/sum(y$Count),3)*100`% of the incidents.  Home is the most likely location for abduction for males. For females, highway/road and home are equally likely.
+
+
+```{r echo=FALSE}
+Sex.loc <- ddply(subset(kidnap.c,LocGroup=="top" & Sex.of.Victim!="U: Unknown"),.(Location,Sex.of.Victim), summarize, freq=length(Sex.of.Victim))
+ggplot(data=Sex.loc, aes(x=ordered(Location,topy),y=freq, fill=Sex.of.Victim))+geom_bar(stat="identity")+xlab("")+ylab("Frequency")+ggtitle("Incidents by Location")+theme(axis.text.x=element_text(size=8),legend.justification=c(1,1),legend.position=c(1,1))
+
+```
+
